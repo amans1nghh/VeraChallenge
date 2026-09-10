@@ -52,12 +52,12 @@ async def healthz():
 @app.get("/v1/metadata")
 async def metadata():
     return {
-        "team_name": "Samast Technologies",
-        "team_members": [],
+        "team_name": "Amans Technology",
+        "team_members": ["Aman Deep"],
         "model": "rule-based-deterministic-composer",
         "approach": "Deterministic template composer dispatched by trigger.kind — no LLM call, "
                     "so every field traces back to a pushed context and output is exactly reproducible.",
-        "contact_email": "finance@magicpin.in",
+        "contact_email": "amandeeprxl9@gmail.com",
         "version": "1.0.0",
         "submitted_at": SUBMITTED_AT,
     }
@@ -95,32 +95,57 @@ class TickBody(BaseModel):
     available_triggers: list[str] = []
 
 
+# Coarse severity ranking by trigger kind: safety/compliance first, then
+# concrete performance signals, then relationship/nurture, then low-urgency
+# content nudges. Unlisted kinds sort last (== 0).
+TRIGGER_PRIORITY = {
+    "supply_alert": 100, "regulation_change": 90, "renewal_due": 80,
+    "winback_eligible": 75, "perf_dip": 70, "seasonal_perf_dip": 65,
+    "chronic_refill_due": 60, "recall_due": 60, "competitor_opened": 55,
+    "gbp_unverified": 50, "review_theme_emerged": 48, "perf_spike": 45,
+    "milestone_reached": 40, "active_planning_intent": 38,
+    "trial_followup": 35, "appointment_tomorrow": 35,
+    "customer_lapsed_hard": 32, "customer_lapsed_soft": 28,
+    "cde_opportunity": 25, "festival_upcoming": 22, "ipl_match_today": 20,
+    "wedding_package_followup": 18, "category_seasonal": 15,
+    "curious_ask_due": 10, "research_digest": 8, "dormant_with_vera": 5,
+}
+MAX_ACTIONS_PER_MERCHANT_PER_TICK = 1  # fatigue cap: one nudge per merchant per tick
+
+
 @app.post("/v1/tick")
 async def tick(body: TickBody):
-    actions = []
+    # Resolve + filter first, so we can rank before deciding what to send.
+    candidates = []
     for trg_id in body.available_triggers:
-        if len(actions) >= 20:
-            break
-
         trg = get_payload("trigger", trg_id)
         if not trg:
             continue
-
         suppression_key = trg.get("suppression_key") or trg_id
         if suppression_key in sent_suppression_keys:
             continue
-
         merchant_id = trg.get("merchant_id")
         merchant = get_payload("merchant", merchant_id)
         if not merchant:
             continue
-
         category = get_payload("category", merchant.get("category_slug"))
         if not category:
             continue
-
         customer_id = trg.get("customer_id")
         customer = get_payload("customer", customer_id) if customer_id else None
+        priority = TRIGGER_PRIORITY.get(trg.get("kind", ""), 0)
+        candidates.append((priority, trg_id, trg, merchant, category, customer, suppression_key, merchant_id))
+
+    # Rank best-signal-first, then cap to one action per merchant per tick
+    # so multiple triggers for the same merchant don't all fire at once.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    seen_merchants = set()
+    actions = []
+    for priority, trg_id, trg, merchant, category, customer, suppression_key, merchant_id in candidates:
+        if len(actions) >= 20:
+            break
+        if merchant_id in seen_merchants:
+            continue  # a higher-priority trigger for this merchant already won this tick
 
         composed = composer.compose(category, merchant, trg, customer)
         conv_id = f"conv_{merchant_id}_{trg_id}_{next(_conv_seq)}"
@@ -134,6 +159,7 @@ async def tick(body: TickBody):
             "customer_id": customer_id,
         }
         sent_suppression_keys.add(suppression_key)
+        seen_merchants.add(merchant_id)
 
         actions.append({
             "conversation_id": conv_id,
