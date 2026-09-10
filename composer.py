@@ -357,7 +357,7 @@ def h_planning(cat, m, trg, cust):
         body += f"- Sized for your current ~{leads} monthly leads\n"
     body += f"- {topic.title()} — draft ready on your confirm\n\n" + close("confirm", hindi)
     return dict(body=body, cta="binary_confirm_cancel", send_as="vera", template_name="vera_active_planning_intent_v1",
-                rationale="Merchant already said yes (see conversation_history) — switching straight to a draft + confirm, not another qualifying question.")
+                rationale="Trigger scope is active_planning_intent — merchant has already signaled intent, so skipping straight to a draft + confirm instead of a qualifying question.")
 
 
 def h_wedding_followup(cat, m, trg, cust):
